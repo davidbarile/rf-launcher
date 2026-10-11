@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>RF Launcher</title>
+  <meta name="description" content="Opens the Revenue Foundry Command Center and wakes its computer when it is asleep.">
+  <meta name="theme-color" content="#141416">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="RF">
+  <meta name="referrer" content="no-referrer">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <!-- RF itself. No secrets live on this page: the wake URL/key are typed into Settings on each device
+       and kept only in that browser's localStorage. -->
+  <iframe id="rf" title="Revenue Foundry" allow="clipboard-read; clipboard-write; fullscreen; web-share" referrerpolicy="no-referrer" hidden></iframe>
+
+  <!-- Status screen: checking / asleep / waking / not set up. -->
+  <main id="screen" class="screen">
+    <div class="card">
+      <img src="icons/icon-192.png" alt="" class="logo" width="72" height="72">
+      <h1 id="s-title">Checking Revenue Foundry…</h1>
+      <p id="s-text" class="muted">Looking for the Command Center on your tailnet.</p>
+      <div id="s-progress" class="progress" hidden><span></span></div>
+      <div class="actions">
+        <button id="s-wake" class="btn gold" hidden>Wake RF</button>
+        <button id="s-retry" class="btn" hidden>Check again</button>
+        <button id="s-open" class="btn" hidden>Open anyway</button>
+        <button id="s-settings" class="btn ghost" hidden>Settings</button>
+      </div>
+      <p id="s-detail" class="dim"></p>
+    </div>
+  </main>
+
+  <!-- Always-visible controls. -->
+  <nav id="bar" class="bar" aria-label="Launcher">
+    <span id="dot" class="dot" title="RF status"></span>
+    <button id="b-reload" class="ib" title="Reload RF" aria-label="Reload RF">
+      <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
+    <button id="b-wake" class="ib" title="Wake RF" aria-label="Wake RF">
+      <svg viewBox="0 0 24 24"><path d="M12 3v8M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></button>
+    <button id="b-settings" class="ib" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+  </nav>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <!-- One-time, on-device settings. -->
+  <dialog id="settings">
+    <form method="dialog" id="settings-form">
+      <h2>Launcher settings</h2>
+      <p class="muted">Saved only in this browser on this device (localStorage). Nothing here is sent anywhere except the wake call itself.</p>
+      <label>RF address<input id="f-rf" type="url" required spellcheck="false" autocomplete="off"></label>
+      <fieldset>
+        <legend>Wake webhook (from the Grok Bot app: routine “Wake RF on demand” → Webhook)</legend>
+        <label>POST to (webhook URL)<input id="f-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://api2.cursor.sh/automations/webhook/…"></label>
+        <label>Key<input id="f-key" type="password" spellcheck="false" autocomplete="off" placeholder="crsr_…  (with or without “Bearer ”)"></label>
+      </fieldset>
+      <fieldset>
+        <legend>Optional relay: GitHub Actions (use if the browser blocks the direct call)</legend>
+        <label>GitHub token (fine-grained, Actions: read &amp; write on <code id="f-repo-name"></code> only)<input id="f-gh" type="password" spellcheck="false" autocomplete="off" placeholder="github_pat_…"></label>
+        <label>Relay repo<input id="f-repo" type="text" spellcheck="false" autocomplete="off"></label>
+      </fieldset>
+      <div class="actions">
+        <button value="save" class="btn gold" id="f-save">Save</button>
+        <button value="cancel" class="btn" formnovalidate>Cancel</button>
+        <button type="button" class="btn ghost danger" id="f-clear">Forget all</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

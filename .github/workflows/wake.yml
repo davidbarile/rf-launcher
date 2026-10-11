@@ -1,0 +1,35 @@
+# Optional relay for the launcher's Wake button.
+# Browsers can't call the Grok Bot webhook directly (it sends no CORS headers for this site), so the
+# launcher can instead start this workflow through the GitHub API, and the workflow calls the webhook.
+# The webhook URL and key live only in this repo's encrypted Actions secrets, never in the code:
+#   RF_WAKE_URL  = the routine's "POST to" URL
+#   RF_WAKE_KEY  = the routine's key (with or without "Bearer ")
+# Only people with write access to this repo (or a token with Actions: write on it) can start it.
+name: Wake RF
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: wake-rf
+  cancel-in-progress: false
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Call the Grok Bot wake webhook
+        env:
+          RF_WAKE_URL: ${{ secrets.RF_WAKE_URL }}
+          RF_WAKE_KEY: ${{ secrets.RF_WAKE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RF_WAKE_URL}" ] || [ -z "${RF_WAKE_KEY}" ]; then
+            echo "::error::Set the RF_WAKE_URL and RF_WAKE_KEY repository secrets first."; exit 1
+          fi
+          key="$(printf '%s' "${RF_WAKE_KEY}" | tr -d '\r\n' | sed -E 's/^[Aa]uthorization:[[:space:]]*//; s/^[Bb]earer[[:space:]]+//')"
+          url="$(printf '%s' "${RF_WAKE_URL}" | tr -d '\r\n')"
+          code="$(curl -sS -o /tmp/resp -w '%{http_code}' -X POST "${url}" \
+            -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" \
+            --data '{"source":"rf-launcher-relay","action":"wake"}')"
+          echo "Webhook answered HTTP ${code}"
+          [ "${code}" = "200" ] || { echo "::error::Wake webhook returned HTTP ${code}"; exit 1; }
