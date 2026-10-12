@@ -5,7 +5,7 @@
 
 const DEFAULT_RF = "https://grokbot-box.tail1c63a8.ts.net";
 const PING_PATH = "/api/ping";          // tiny, unauthenticated, CORS-enabled for this origin
-const PING_TIMEOUT_MS = 5000;
+const PING_TIMEOUT_MS = 15000;
 const POLL_EVERY_MS = 10000;
 const POLL_FOR_MS = 3 * 60 * 1000;      // direct webhook
 const RELAY_EXTRA_MS = 60 * 1000;       // GitHub Actions needs ~20-40 s to start a run
