@@ -6,10 +6,9 @@
 const DEFAULT_RF = "https://grokbot-box.tail1c63a8.ts.net";
 const PING_PATH = "/api/ping";          // tiny, unauthenticated, CORS-enabled for this origin
 const PING_TIMEOUT_MS = 15000;
-const POLL_EVERY_MS = 10000;
+const POLL_EVERY_MS = 5000;
 const POLL_FOR_MS = 3 * 60 * 1000;      // direct webhook
 const RELAY_EXTRA_MS = 60 * 1000;       // GitHub Actions needs ~20-40 s to start a run
-const RELAY_WORKFLOW = "wake.yml";
 const K = { rf: "rf.launcher.rf", url: "rf.launcher.wakeUrl", key: "rf.launcher.wakeKey", gh: "rf.launcher.ghToken", repo: "rf.launcher.relayRepo" };
 
 const $ = (s) => document.querySelector(s);
@@ -32,7 +31,7 @@ const cleanKey = (k) => k.trim().replace(/^authorization:\s*/i, "").replace(/^be
 
 /* ---------- UI helpers ---------- */
 const frame = $("#rf");
-let state = "checking", pollTimer = null, toastTimer = null;
+let state = "checking", toastTimer = null;
 function toast(text, bad = false, ms = 6000) {
   const t = $("#toast"); t.textContent = text; t.className = "toast" + (bad ? " bad" : ""); t.hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), ms);
@@ -55,7 +54,7 @@ function showAsleep(why) {
   const c = cfg();
   screen({
     title: "RF is asleep",
-    text: canWake(c) ? "The Command Center isn't answering. Its computer is probably asleep. Wake it and this page opens RF by itself when it's back."
+    text: canWake(c) ? "The Command Center isn't answering. Its computer is probably asleep. Press Wake & open and this page opens RF by itself when it's back."
       : "The Command Center isn't answering. To wake it from here, add the wake webhook in Settings (one time on this device).",
     detail: why, wake: canWake(c), retry: true, open: true, settings: !canWake(c),
   });
@@ -91,71 +90,49 @@ async function check({ quiet = false } = {}) {
   if (!quiet) { state = "checking"; screen({ title: "Checking Revenue Foundry…", text: "Looking for the Command Center on your tailnet." }); }
   const r = await ping();
   if (state === "waking") return;
-  if (r.up) showRF(); else showAsleep(r.why);
+  // Down and wake set up: wake & open by itself (on launch and when the app comes back to the front).
+  if (r.up) showRF(); else if (canWake()) wakeAndOpen(); else showAsleep(r.why);
 }
 
-/* ---------- wake ---------- */
-async function sendDirect(c) {
-  const res = await timed(c.url, {
-    method: "POST", mode: "cors", cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer",
-    headers: { "Authorization": "Bearer " + cleanKey(c.key), "Content-Type": "application/json" },
-    body: JSON.stringify({ source: "rf-launcher", action: "wake", at: new Date().toISOString(), reason: "RF did not answer the launcher" }),
-  }, 20000);
-  if (res.ok) return;
-  let msg = ""; try { msg = (await res.json()).message || ""; } catch (e) {}
-  const err = new Error(res.status === 401 ? "The webhook rejected the key (HTTP 401). Copy the current key from the Grok Bot app into Settings."
-    : `The webhook answered HTTP ${res.status}${msg ? ": " + msg : ""}. Check the routine is Active and the URL is current.`);
-  err.final = true; throw err;
-}
-async function sendRelay(c) {
-  const res = await timed(`https://api.github.com/repos/${c.repo}/actions/workflows/${RELAY_WORKFLOW}/dispatches`, {
-    method: "POST", mode: "cors", cache: "no-store", credentials: "omit",
-    headers: { "Authorization": "Bearer " + c.gh.trim(), "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" },
-    body: JSON.stringify({ ref: "main" }),
-  }, 20000);
-  if (res.status === 204 || res.ok) return;
-  let msg = ""; try { msg = (await res.json()).message || ""; } catch (e) {}
-  throw new Error(`GitHub relay refused (HTTP ${res.status}${msg ? ": " + msg : ""}). Check the token has Actions read & write on ${c.repo}.`);
-}
-async function wake() {
-  const c = cfg();
-  if (!canWake(c)) { toast("Add the wake webhook in Settings first."); return openSettings(); }
+/* ---------- wake & open: ping, wake, poll with progress, open RF (one press, or by itself on launch) ---------- */
+const WOKE_AT = "rf.launcher.wokeAt";   // a wake sent a moment ago is still running: poll, don't send another
+const WAKE_RUNNING_MS = 4 * 60 * 1000;
+async function wakeAndOpen() {
   if (state === "waking") return;
-  if (state === "up" && !confirm("RF is answering right now. Waking restarts RF and Tailscale. Do it anyway?")) return;
   state = "waking"; dot("busy"); $("#b-wake").classList.add("spin");
-  screen({ title: "Waking RF…", text: "Sending the wake call.", progress: 0 });
-  let via = "";
-  try {
-    if (c.url && c.key) {
-      try { await sendDirect(c); via = "direct"; }
-      catch (e) {
-        if (e.final || !(c.gh && c.repo)) throw (e.final ? e : new Error(
-          "This browser blocked the direct call to the webhook (it doesn't allow cross-site calls). Set up the GitHub relay in Settings (see the README), or wake RF from the Grok Bot app."));
-      }
+  const stop = (opts) => { state = "down"; dot("down"); $("#b-wake").classList.remove("spin"); screen(opts); };
+  screen({ title: "Checking Revenue Foundry…", text: "Looking for the Command Center on your tailnet.", progress: 0 });
+  const first = await ping();
+  if (first.up) { $("#b-wake").classList.remove("spin"); showRF(true); return; }
+  const c = cfg();
+  if (!canWake(c)) return stop({ title: "RF is asleep", text: "The Command Center isn't answering. To wake it from here, add the GitHub relay token or the wake webhook in Settings (one time on this device).",
+    detail: first.why, retry: true, open: true, settings: true });
+  let via = "earlier wake";
+  if (Date.now() - Number(store.get(WOKE_AT) || 0) > WAKE_RUNNING_MS) {
+    screen({ title: "Waking RF…", text: "Sending the wake call.", detail: first.why, progress: 0.02 });
+    try {
+      const r = await sendWake(c, (url, opts) => timed(url, opts, 20000));
+      via = r.via; store.set(WOKE_AT, String(Date.now()));
+      if (r.warning) toast(r.warning, true, 12000);
+    } catch (e) {
+      return stop({ title: "Couldn't send the wake call", text: e.message, detail: first.why, wake: true, retry: true, open: true, settings: !!e.settings });
     }
-    if (!via) { await sendRelay(c); via = "relay"; }
-  } catch (e) {
-    state = "down"; $("#b-wake").classList.remove("spin"); dot("down");
-    screen({ title: "Couldn't send the wake call", text: e.message, retry: true, open: true, settings: true, wake: true });
-    return;
   }
-  // Sent: poll until RF answers, then load it.
   const limit = POLL_FOR_MS + (via === "relay" ? RELAY_EXTRA_MS : 0), started = Date.now();
-  const tick = async () => {
+  const sent = { relay: "Wake sent through the GitHub relay.", direct: "Wake sent.", "earlier wake": "A wake was sent a moment ago." }[via];
+  for (;;) {
     const elapsed = Date.now() - started;
-    screen({ title: "Waking RF…", text: via === "relay" ? "Wake sent through the GitHub relay. Waiting for RF to answer…" : "Wake sent. Waiting for RF to answer…",
-      detail: `Checking every ${POLL_EVERY_MS / 1000} s · ${Math.round(elapsed / 1000)} s so far`, progress: Math.min(1, elapsed / limit) });
+    screen({ title: "Waking RF…", text: sent + " Waiting for RF to answer; it opens by itself.",
+      detail: `Checking every ${POLL_EVERY_MS / 1000} s · ${Math.round(elapsed / 1000)} s so far`, progress: Math.min(1, 0.05 + elapsed / limit) });
     const r = await ping();
-    if (r.up) { clearTimeout(pollTimer); $("#b-wake").classList.remove("spin"); showRF(true); toast("RF is awake."); return; }
+    if (r.up) { store.set(WOKE_AT, ""); $("#b-wake").classList.remove("spin"); showRF(true); toast("RF is awake."); return; }
     if (Date.now() - started >= limit) {
-      state = "down"; $("#b-wake").classList.remove("spin"); dot("down");
-      screen({ title: "RF hasn't come back yet", text: `No answer after ${Math.round(limit / 60000)} min. The wake routine may still be running. Check the Grok Bot app, then try again.`,
+      store.set(WOKE_AT, "");
+      return stop({ title: "RF hasn't come back yet", text: `No answer after ${Math.round(limit / 60000)} min. The wake routine may still be running. Check the Grok Bot app, then try again.`,
         detail: r.why, wake: true, retry: true, open: true });
-      return;
     }
-    pollTimer = setTimeout(tick, POLL_EVERY_MS);
-  };
-  pollTimer = setTimeout(tick, 1500);
+    await new Promise((res) => setTimeout(res, POLL_EVERY_MS));
+  }
 }
 
 /* ---------- settings ---------- */
@@ -187,8 +164,8 @@ $("#b-reload").addEventListener("click", async () => {
   const r = await ping(); $("#b-reload").classList.remove("spin");
   if (r.up) showRF(true); else showAsleep(r.why);
 });
-$("#b-wake").addEventListener("click", wake);
-$("#s-wake").addEventListener("click", wake);
+$("#b-wake").addEventListener("click", wakeAndOpen);
+$("#s-wake").addEventListener("click", wakeAndOpen);
 $("#b-settings").addEventListener("click", openSettings);
 $("#s-settings").addEventListener("click", openSettings);
 $("#s-retry").addEventListener("click", () => check());
@@ -199,4 +176,4 @@ window.addEventListener("online", () => check({ quiet: state === "up" }));
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 check();
-if (!canWake()) setTimeout(() => toast("Tip: add the wake webhook in Settings (gear) once on this device."), 2500);
+if (!canWake()) setTimeout(() => toast("Tip: add the wake relay token or webhook in Settings (gear) once on this device."), 2500);

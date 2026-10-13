@@ -21,6 +21,7 @@ h2 { font-size: 18px; margin: 0 0 6px; }
 .btn { appearance: none; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); padding: 10px 16px; border-radius: 10px; font: 600 15px var(--font); cursor: pointer; }
 .btn:active { transform: translateY(1px); }
 .btn.gold { background: var(--gold); color: #1c1206; border: 0; }
+.btn.big { min-height: 56px; min-width: 220px; font-size: 18px; }
 .btn.ghost { background: transparent; }
 .btn.danger { color: var(--bad); }
 .btn:disabled { opacity: .55; cursor: default; }

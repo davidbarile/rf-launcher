@@ -1,9 +1,16 @@
 # RF Launcher
 
-An always-up page for the Revenue Foundry Command Center. It shows RF full-screen in a frame, checks
-whether RF answers (`/api/ping`, 5 s timeout), and when RF's computer is asleep offers a **Wake**
-button that calls the Grok Bot "Wake RF on demand" routine, then polls every 10 s for up to 3 min and
-loads RF as soon as it answers.
+An always-up page for the Revenue Foundry Command Center. It shows RF full-screen in a frame and
+checks whether RF answers (`/api/ping`, 15 s timeout). When RF is down it runs **Wake & open** on its
+own as soon as the page opens. One press does the same from the status screen or the bar's power
+button. Wake & open pings RF first and opens it right away if it is up. Otherwise it sends the wake
+call through the GitHub relay first when a token is set, falling back to the webhook. It then polls
+every 5 s with a progress bar for up to 3 min (4 with the relay) and opens RF the moment it answers.
+A wake sent in the last 4 minutes is not sent again; the page just keeps polling. If GitHub rejects
+the relay token (HTTP 401), the page says so, points to Settings and falls back to the webhook when
+one is set.
+
+Tests: `node --test` (the wake-sending logic in `wake.js`).
 
 **This repo has no secrets.** The webhook URL and key are typed into the page's Settings once per
 device and kept only in that browser's `localStorage`. The page reaches RF only over Tailscale, so
